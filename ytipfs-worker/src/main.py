@@ -215,7 +215,7 @@ def render_health_html(title: str, payload: Dict[str, Any]) -> HTMLResponse:
     lines = [
         "<!doctype html>",
         "<html>",
-        f"  <head><meta charset="utf-8"><title>{title}</title></head>",
+        f"  <head><meta charset='utf-8'><title>{title}</title></head>",
         "  <body>",
         f"    <h1>{title}</h1>",
     ]
@@ -224,8 +224,7 @@ def render_health_html(title: str, payload: Dict[str, Any]) -> HTMLResponse:
         lines.append(f"    <p>{key}: {value}</p>")
 
     lines.extend(["  </body>", "</html>"])
-    return HTMLResponse("
-".join(lines))
+    return HTMLResponse("\n".join(lines))
 
 
 def _b64url_decode(s: str) -> str:
