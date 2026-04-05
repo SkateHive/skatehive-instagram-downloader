@@ -262,25 +262,35 @@ def _pin_to_pinata(file_path: Path, name: Optional[str] = None) -> dict:
     return resp.json()
 
 def _needs_h264_conversion(file_path: Path) -> bool:
-    """Check if video needs conversion to H.264 for mobile compatibility"""
+    """Check if video needs conversion to H.264/yuv420p for mobile compatibility"""
     try:
         cmd = [
-            "ffprobe", "-v", "quiet", "-print_format", "json", 
+            "ffprobe", "-v", "quiet", "-print_format", "json",
             "-show_streams", "-select_streams", "v:0", str(file_path)
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
         info = json.loads(result.stdout)
-        
+
         for stream in info.get("streams", []):
             codec_name = stream.get("codec_name", "").lower()
-            # Check for mobile-incompatible codecs
+            # Non-H.264 codecs are never mobile-safe
             if codec_name in ["vp9", "vp8", "av1", "hevc"]:
                 logging.info(f"Found {codec_name} codec, conversion needed for mobile compatibility")
                 return True
             elif codec_name in ["h264", "avc"]:
-                logging.info(f"Found {codec_name} codec, mobile compatible")
+                # H.264 is the right codec, but pixel format also matters.
+                # 10-bit formats (yuv420p10le, yuv422p10le, etc.) are not supported
+                # by most mobile hardware decoders — must be yuv420p (8-bit 4:2:0).
+                pix_fmt = stream.get("pix_fmt", "").lower()
+                if pix_fmt and pix_fmt != "yuv420p":
+                    logging.info(
+                        f"H.264 with non-standard pixel format ({pix_fmt}), "
+                        f"conversion to yuv420p needed for mobile compatibility"
+                    )
+                    return True
+                logging.info(f"Found {codec_name}/{pix_fmt or 'unknown'} codec, mobile compatible")
                 return False
-        
+
         # If we can't determine, assume conversion needed
         return True
     except Exception as e:
@@ -302,10 +312,14 @@ def _convert_media(file_path: Path, media_type: str) -> Path:
             out_path = file_path.with_suffix(".mp4") if suffix != ".mp4" else file_path.parent / f"{file_path.stem}_h264.mp4"
             cmd = [
                 "ffmpeg", "-y", "-i", str(file_path),
-                "-c:v", "libx264", "-crf", "23", "-preset", "medium",  # Better quality settings
+                "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+                # Cap to 1080p — Instagram can deliver 4K, but mobile players
+                # handle ≤1080p much more reliably and file sizes are manageable.
+                "-vf", "scale=min(iw\\,1920):min(ih\\,1080):force_original_aspect_ratio=decrease",
+                "-maxrate", "5M", "-bufsize", "10M",
+                "-pix_fmt", "yuv420p",  # 8-bit 4:2:0 — required for universal mobile hardware decode
                 "-c:a", "aac", "-b:a", "128k",
-                "-movflags", "+faststart",  # Optimize for web streaming
-                "-pix_fmt", "yuv420p",  # Ensure mobile compatibility
+                "-movflags", "+faststart",
                 str(out_path)
             ]
             logging.info(f"Converting video to mobile-compatible H.264: {' '.join(cmd)}")
